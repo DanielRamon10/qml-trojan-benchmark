@@ -229,6 +229,18 @@ maior consequência. Mas **recall sozinho** é enganoso (o detector trivial "tud
 recall 1,0). Por isso reportamos **sempre em conjunto** acurácia **balanceada**, **F1**, **F1-macro**
 e **ROC-AUC**, além das **matrizes de confusão**. A tabela final sai no formato **média ± desvio**.
 
+### O que os resultados realmente mostraram (leitura honesta)
+No *benchmark* completo, **BoW (`count`) + modelo linear** (LinearSVC/LogReg) detecta **quase
+perfeitamente** — recall ≈ F1 ≈ ROC-AUC ≈ 1,0 — **mesmo sob `GroupKFold`** e **mesmo no caso difícil
+só com `H`** (`detection_hard_summary.csv`). O motivo é instrutivo: os circuitos golden são compilados
+para um vocabulário pequeno e regular (`ry, p, cx, h`), então **qualquer inserção vira uma anomalia de
+n-gramas**; e `x/y/z/t` são tokens que um *compile* limpo **nunca** emite (fora do vocabulário). Já
+**TF-IDF e os Naive Bayes são bem mais fracos** (recall 0,08–0,45 sob `GroupKFold`), porque o TF-IDF
+**reduz o peso** justamente dos tokens estruturais frequentes que carregam o sinal. Conclusão honesta:
+a detecção lexical é fácil **neste cenário muito regular**, não em geral — em circuitos reais e
+diversos um detector de "saco de tokens" seria bem menos confiável, pois **não modela a semântica** do
+circuito. Por isso separamos o subproblema **in-vocabulary (`H`)**, que é o verdadeiro desafio.
+
 ---
 
 ## 8. `explain.py` + `_tree_shap.py` — SHAP

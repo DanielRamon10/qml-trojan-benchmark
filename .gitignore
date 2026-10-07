@@ -28,3 +28,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# User-local folder (not part of the project)
+artigos/

@@ -108,25 +108,142 @@ round-trips are tested.
 ## Results
 
 <!-- RESULTS:START -->
-*(Filled in automatically after the full run — see commit history.)*
+
+### 1. Clean accuracy of the golden VQCs
+
+Trained **108** golden VQCs; mean clean test accuracy **0.840 ± 0.154**.
+
+| dataset       |     z |    zz |
+|:--------------|------:|------:|
+| breast_cancer | 0.903 | 0.758 |
+| digits01      | 0.985 | 0.816 |
+| iris          | 0.993 | 0.585 |
+
+### 2. Sensitivity (TVD) and accuracy impact
+
+Across **1620** infected variants, mean TVD **0.382** vs a golden-vs-golden sampling baseline of **0.053**; mean accuracy drop **0.307**.
+
+**By inserted gate:**
+
+| gate   |   tvd_mean |   bc_mean |   bd_mean |   accuracy_drop |
+|:-------|-----------:|----------:|----------:|----------------:|
+| h      |      0.425 |     0.831 |     0.195 |           0.335 |
+| t      |      0.119 |     0.979 |     0.021 |           0.017 |
+| x      |      0.491 |     0.763 |     0.323 |           0.436 |
+| y      |      0.578 |     0.708 |     0.398 |           0.576 |
+| z      |      0.299 |     0.871 |     0.167 |           0.172 |
+
+**By insertion mode:**
+
+| mode       |   tvd_mean |   accuracy_drop |
+|:-----------|-----------:|----------------:|
+| controlled |      0.39  |           0.338 |
+| idle       |      0.358 |           0.307 |
+| random     |      0.4   |           0.277 |
+
+![TVD by gate](results/full/figures/tvd_by_gate.png)
+
+![Accuracy drop by gate](results/full/figures/accdrop_by_gate.png)
+
+**SHAP — top drivers of mean TVD:** `gate_t` (0.058), `gate_y` (0.042), `gate_x` (0.023), `gate_z` (0.020), `op_position` (0.007), `gate_h` (0.006)
+
+![SHAP TVD](results/full/figures/shap_tvd.png)
+
+### 3. Triggered backdoor: ASR vs clean accuracy
+
+Conditional backdoor on the 4-qubit `z`-encoding models (18 models):
+
+|   k_trigger |   asr |   clean_acc_backdoor |   clean_accuracy_drop |
+|------------:|------:|---------------------:|----------------------:|
+|           1 | 0.999 |                0.578 |                 0.353 |
+|           2 | 0.969 |                0.707 |                 0.224 |
+|           3 | 0.981 |                0.917 |                 0.014 |
+
+Higher trigger width `k` keeps attack success high while reducing clean-accuracy leakage (a more selective, stealthier trigger).
+
+![Backdoor ASR vs clean](results/full/figures/backdoor_asr_vs_clean.png)
+
+### 4. Text-based detection (golden vs infected)
+
+Positive class = **infected**. Mean ± std across seeds; GroupKFold keeps all variants of a base circuit in one fold.
+
+| cv         | vectorizer   | classifier   | recall        | balanced_accuracy   | f1            | roc_auc       |
+|:-----------|:-------------|:-------------|:--------------|:--------------------|:--------------|:--------------|
+| group      | count        | complnb      | 0.335 ± 0.081 | 0.628 ± 0.041       | 0.494 ± 0.086 | 0.735 ± 0.055 |
+| group      | count        | linsvc       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| group      | count        | logreg       | 0.986 ± 0.013 | 0.993 ± 0.006       | 0.993 ± 0.007 | 1.000 ± 0.000 |
+| group      | count        | multinb      | 0.335 ± 0.081 | 0.628 ± 0.041       | 0.494 ± 0.086 | 0.735 ± 0.055 |
+| group      | tfidf        | complnb      | 0.175 ± 0.152 | 0.527 ± 0.039       | 0.266 ± 0.218 | 0.685 ± 0.046 |
+| group      | tfidf        | linsvc       | 0.327 ± 0.063 | 0.598 ± 0.059       | 0.486 ± 0.069 | 0.808 ± 0.082 |
+| group      | tfidf        | logreg       | 0.445 ± 0.061 | 0.565 ± 0.054       | 0.605 ± 0.058 | 0.656 ± 0.037 |
+| group      | tfidf        | multinb      | 0.175 ± 0.152 | 0.527 ± 0.039       | 0.266 ± 0.218 | 0.685 ± 0.046 |
+| stratified | count        | complnb      | 0.375 ± 0.095 | 0.581 ± 0.069       | 0.533 ± 0.100 | 0.653 ± 0.049 |
+| stratified | count        | linsvc       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| stratified | count        | logreg       | 0.994 ± 0.005 | 0.997 ± 0.003       | 0.997 ± 0.003 | 1.000 ± 0.000 |
+| stratified | count        | multinb      | 0.375 ± 0.095 | 0.581 ± 0.069       | 0.533 ± 0.100 | 0.653 ± 0.049 |
+| stratified | tfidf        | complnb      | 0.080 ± 0.071 | 0.489 ± 0.031       | 0.140 ± 0.111 | 0.584 ± 0.065 |
+| stratified | tfidf        | linsvc       | 0.551 ± 0.057 | 0.636 ± 0.057       | 0.700 ± 0.046 | 0.730 ± 0.065 |
+| stratified | tfidf        | logreg       | 0.484 ± 0.051 | 0.544 ± 0.066       | 0.639 ± 0.047 | 0.609 ± 0.056 |
+| stratified | tfidf        | multinb      | 0.080 ± 0.071 | 0.489 ± 0.031       | 0.140 ± 0.111 | 0.584 ± 0.065 |
+
+![Detection recall](results/full/figures/detection_recall.png)
+
+![Confusion matrices (GroupKFold)](results/full/figures/confusions_group.png)
+
+
+**Hard sub-problem — detecting the *in-vocabulary* `H` insertion only.** Golden circuits in this basis emit only `ry, p, cx, h`, so inserted `x/y/z/t` are out-of-vocabulary tokens and trivially flagged; the `H` insertion is the genuinely hard case because `h` already occurs in golden.
+
+| cv         | vectorizer   | classifier   | recall        | balanced_accuracy   | f1            | roc_auc       |
+|:-----------|:-------------|:-------------|:--------------|:--------------------|:--------------|:--------------|
+| group      | count        | complnb      | 0.175 ± 0.220 | 0.507 ± 0.009       | 0.221 ± 0.273 | 0.593 ± 0.029 |
+| group      | count        | linsvc       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| group      | count        | logreg       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| group      | count        | multinb      | 0.175 ± 0.220 | 0.507 ± 0.009       | 0.221 ± 0.273 | 0.593 ± 0.029 |
+| group      | tfidf        | complnb      | 0.079 ± 0.122 | 0.500 ± 0.000       | 0.112 ± 0.174 | 0.601 ± 0.021 |
+| group      | tfidf        | linsvc       | 0.190 ± 0.137 | 0.583 ± 0.060       | 0.289 ± 0.195 | 0.774 ± 0.055 |
+| group      | tfidf        | logreg       | 0.434 ± 0.082 | 0.565 ± 0.066       | 0.561 ± 0.070 | 0.645 ± 0.038 |
+| group      | tfidf        | multinb      | 0.079 ± 0.122 | 0.500 ± 0.000       | 0.112 ± 0.174 | 0.601 ± 0.021 |
+| stratified | count        | complnb      | 0.194 ± 0.139 | 0.432 ± 0.043       | 0.273 ± 0.162 | 0.426 ± 0.035 |
+| stratified | count        | linsvc       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| stratified | count        | logreg       | 1.000 ± 0.000 | 1.000 ± 0.000       | 1.000 ± 0.000 | 1.000 ± 0.000 |
+| stratified | count        | multinb      | 0.194 ± 0.139 | 0.432 ± 0.043       | 0.273 ± 0.162 | 0.426 ± 0.035 |
+| stratified | tfidf        | complnb      | 0.085 ± 0.102 | 0.430 ± 0.033       | 0.128 ± 0.142 | 0.436 ± 0.060 |
+| stratified | tfidf        | linsvc       | 0.350 ± 0.065 | 0.537 ± 0.064       | 0.482 ± 0.073 | 0.629 ± 0.061 |
+| stratified | tfidf        | logreg       | 0.394 ± 0.074 | 0.470 ± 0.049       | 0.505 ± 0.075 | 0.516 ± 0.064 |
+| stratified | tfidf        | multinb      | 0.085 ± 0.102 | 0.430 ± 0.033       | 0.128 ± 0.142 | 0.436 ± 0.060 |
+
 <!-- RESULTS:END -->
 
 ---
 
 ## Honest discussion, limitations and negative results
 
-- **Detection is modest, not solved.** Treating QASM as a bag of tokens captures *lexical* traces of
-  an inserted gate but **not the circuit's semantics**. Under `GroupKFold` (the realistic setting,
-  where the detector is tested on unseen base circuits) performance is clearly weaker than under the
-  optimistic `StratifiedKFold`. We report recall **together with** balanced accuracy, F1 and ROC-AUC
-  precisely so that a trivial "flag-everything" detector cannot look good.
-- **Diagonal gates can be invisible to the label.** `Z` and `T` inserted right before a `Z`-basis
-  measurement commute with it and leave the class unchanged, even though they are "trojans"; their
-  impact appears only when inserted earlier (before the ansatz). The benchmark shows both.
-- **The backdoor works, but with caveats.** On the product `z` encoding the conditional trigger is
-  exact (high ASR with small clean-accuracy leakage, most stealthy at larger trigger width `k`). On
-  the entangling `zz` encoding the per-qubit trigger is only approximate and the attack **degrades** —
-  we measure and report this rather than overstating effectiveness.
+- **The gate matters more than the mode.** Non-diagonal gates (`Y`, `X`, `H`) dominate both the
+  output-distribution shift (TVD) and the accuracy drop; the small phase gate `T` is almost inert
+  (mean TVD ≈ 0.12, accuracy drop ≈ 0.02). SHAP over the structural attributes confirms that the
+  **inserted-gate identity** is by far the strongest driver, while the insertion *mode*
+  (random/idle/controlled) barely moves the averages. This matches the physics: `T`/`Z` are diagonal
+  in the `Z`-measurement basis.
+- **The sampling baseline matters.** The golden-vs-golden TVD floor is ≈ 0.05; reporting trojan TVDs
+  without it would overstate tiny effects. Every TVD in the table should be read against that floor.
+- **Detection: representation and classifier decide everything — and the setup is "too clean".**
+  `CountVectorizer` (BoW) + a **linear** model (LinearSVC / LogReg) detects infected circuits
+  *near-perfectly* (recall ≈ F1 ≈ ROC-AUC ≈ 1.0), **even under GroupKFold** and **even on the hard,
+  in-vocabulary `H`-only sub-problem**. The reason is honest and important: our golden circuits are
+  compiled to a tiny, regular basis (`ry, p, cx, h`), so a single inserted gate is a conspicuous
+  **n-gram anomaly** — and `x/y/z/t` are literally out-of-vocabulary tokens a clean compile never
+  emits. **TF-IDF and the Naive-Bayes variants are much weaker** (recall 0.08–0.45 under GroupKFold),
+  because TF-IDF down-weights exactly the frequent structural tokens that carry the signal. So the
+  takeaway is *not* "detection is easy in general" but "lexical detection is easy **when the clean
+  distribution is this regular**"; on diverse, real-world circuits a bag-of-tokens detector would be
+  far less reliable, since it models no circuit **semantics**. We report recall together with
+  balanced accuracy, F1 and ROC-AUC so a trivial "flag-everything" detector cannot hide.
+- **The backdoor works, but with honest caveats.** On the product `z` encoding the conditional
+  trigger is exact: ASR ≈ 0.97–1.0 across trigger widths, and it becomes *stealthier* as `k` grows
+  (clean-accuracy drop falls from ≈ 0.35 at `k=1` to ≈ 0.01 at `k=3`, because requiring several
+  features at the trigger angle at once is rarer). On the entangling `zz` encoding the per-qubit
+  trigger is only approximate and the attack **degrades** — which is why the experiment targets the
+  `z`-encoding models, and we say so instead of overstating effectiveness.
 - **Classical simulation, few qubits, small datasets.** Everything runs on a noiseless simulator with
   ≤ 6 qubits and PCA-reduced datasets; results need not transfer to noisy hardware or larger models.
 - **We do not re-apply full optimization flows.** The clean flow uses `optimization_level=0`; we do
@@ -191,10 +308,15 @@ leitura por expectativa de paridade), inserimos trojans via um `TransformationPa
 e **ASR**, e avaliamos a detecção com **GroupKFold** e **StratifiedKFold**.
 
 **Resultados principais** (ver a seção *Results* e as figuras em `results/full/figures/`): portas
-**não-diagonais** (`X`, `Y`) têm o maior impacto na distribuição e na acurácia, enquanto `Z`/`T`
-diagonais podem ser inócuas junto à medição; o **backdoor** atinge **ASR alta** mantendo a acurácia
-limpa na codificação `z` (mais furtivo com gatilho mais largo), mas **degrada** na codificação `zz` —
-reportado **honestamente**; a **detecção textual é modesta**, especialmente sob `GroupKFold`.
+**não-diagonais** (`Y`, `X`, `H`) têm o maior impacto na distribuição e na acurácia, enquanto a fase
+`T` é quase inócua (e o SHAP confirma que a **identidade da porta** é o fator dominante, não o modo de
+inserção); o **backdoor** atinge **ASR ≈ 0,97–1,0** mantendo a acurácia limpa na codificação `z` (mais
+furtivo com gatilho mais largo — queda de ~0,35 em `k=1` para ~0,01 em `k=3`), mas **degrada** na
+codificação `zz`, reportado **honestamente**. Na **detecção**, a combinação **BoW (`count`) + modelo
+linear** detecta quase perfeitamente (mesmo sob `GroupKFold` e mesmo no caso difícil só com `H`),
+**porque os circuitos golden são muito regulares** e uma inserção vira uma anomalia de n-gramas;
+**TF-IDF e Naive Bayes são bem mais fracos**. Ou seja, a detecção lexical é fácil *neste cenário
+regular*, não em geral — texto não modela a **semântica** do circuito.
 
 **Limitações.** Simulação clássica sem ruído, poucos qubits, datasets pequenos (com PCA), detecção
 textual que **não modela a semântica** do circuito e sem reaplicação de fluxos completos de

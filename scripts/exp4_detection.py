@@ -38,8 +38,15 @@ LOG = get_logger("exp4")
 METRICS = ["accuracy", "balanced_accuracy", "precision", "recall", "f1", "f1_macro", "roc_auc"]
 
 
-def build_corpus(paths) -> tuple[list[str], np.ndarray, np.ndarray]:
-    """Load golden (label 0) and infected (label 1) QASM texts with base-model group ids."""
+def build_corpus(paths, infected_gates: tuple[str, ...] | None = None,
+                 ) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """Load golden (label 0) and infected (label 1) QASM texts with base-model group ids.
+
+    ``infected_gates`` optionally restricts the infected class to variants whose inserted gate is
+    in the set (filenames look like ``<model>__<gate>_<mode>_s<seed>.qasm``). Restricting to the
+    ``h`` insertion gives the *in-vocabulary* (hard) detection problem, because golden circuits in
+    this basis never contain bare ``x``/``y``/``z``/``t`` tokens, whereas ``h`` already occurs.
+    """
     texts, labels, groups = [], [], []
     model_ids: dict[str, int] = {}
 
@@ -51,6 +58,9 @@ def build_corpus(paths) -> tuple[list[str], np.ndarray, np.ndarray]:
         labels.append(0)
         groups.append(gid(f.stem))
     for f in sorted(paths.infected.glob("*.qasm")):
+        gate = f.stem.split("__")[1].split("_")[0]
+        if infected_gates is not None and gate not in infected_gates:
+            continue
         texts.append(f.read_text(encoding="utf-8"))
         labels.append(1)
         groups.append(gid(f.stem.split("__")[0]))
@@ -94,7 +104,31 @@ def main() -> None:
              **{k: v for k, v in summed.items()})
 
     _figures(detection, summed, paths)
+
+    # Hard sub-problem: detect the IN-VOCABULARY insertion (H only). X/Y/Z/T are bare tokens the
+    # clean basis never emits, so they are trivially detectable; H already occurs in golden.
+    _run_hard_subset(cfg, paths)
     LOG.info("exp4 complete.")
+
+
+def _run_hard_subset(cfg, paths) -> None:
+    texts, labels, groups = build_corpus(paths, infected_gates=("h",))
+    n_pos, n_neg = int((labels == 1).sum()), int((labels == 0).sum())
+    if n_pos == 0 or len(np.unique(groups)) < cfg["cv_splits"]:
+        LOG.info("Hard (H-only) subset skipped (insufficient data).")
+        return
+    LOG.info("Hard subset (H insertions only): %d golden + %d infected", n_neg, n_pos)
+    rows = []
+    for seed in cfg["detect_seeds"]:
+        df, _ = run_detection_grid(texts, labels, groups, n_splits=cfg["cv_splits"], seed=seed)
+        df["seed"] = seed
+        rows.append(df)
+    hard = pd.concat(rows, ignore_index=True)
+    summary = _summarize(hard)
+    summary.to_csv(paths.root / "detection_hard_summary.csv", index=False)
+    LOG.info("Hard (H-only) detection summary (recall | balanced_accuracy | roc_auc):\n%s",
+             summary[["cv", "vectorizer", "classifier", "recall", "balanced_accuracy",
+                      "roc_auc"]].to_string(index=False))
 
 
 def _summarize(detection: pd.DataFrame) -> pd.DataFrame:
