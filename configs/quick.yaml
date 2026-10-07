@@ -1,0 +1,33 @@
+# Quick configuration: validates the whole pipeline end to end in a few minutes.
+name: quick
+
+# --- Golden VQC grid (tiny) --------------------------------------------------------------
+datasets: [breast_cancer]
+encodings: [z, zz]
+ansatz_reps: [1, 2]
+n_qubits: [4]
+seeds: [0, 1, 2]
+feature_map_reps: 2
+max_train: 80
+maxiter: 40
+
+# --- Trojan insertion --------------------------------------------------------------------
+gates: [h, t, x, y, z]
+modes: [random, idle, controlled]
+variants_per_model: 15
+
+# --- Sensitivity simulation --------------------------------------------------------------
+shots: 256
+sim_reps: 5
+n_eval_inputs: 6
+backdoor_shots: 1024
+backdoor_eval_inputs: 40
+
+# --- Backdoor experiment -----------------------------------------------------------------
+backdoor_datasets: [breast_cancer]
+backdoor_k: [1, 2, 3]
+backdoor_angle_hi: 1.5707963267948966
+
+# --- Detection ---------------------------------------------------------------------------
+cv_splits: 3
+detect_seeds: [0, 1]

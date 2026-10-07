@@ -1,0 +1,33 @@
+# Full benchmark configuration (CPU, <= 6 qubits). Target runtime ~40-50 min on 14 cores.
+name: full
+
+# --- Golden VQC grid ---------------------------------------------------------------------
+datasets: [iris, digits01, breast_cancer]
+encodings: [z, zz]
+ansatz_reps: [1, 2, 3]
+n_qubits: [2, 4]
+seeds: [0, 1, 2]           # >= 3 seeds everywhere
+feature_map_reps: 2
+max_train: 200             # cap training-set size to keep simulation at laptop scale
+maxiter: 150               # COBYLA iterations
+
+# --- Trojan insertion --------------------------------------------------------------------
+gates: [h, t, x, y, z]
+modes: [random, idle, controlled]
+variants_per_model: 15     # 5 gates x 3 modes, one of each -> balanced design
+
+# --- Sensitivity simulation --------------------------------------------------------------
+shots: 512
+sim_reps: 15
+n_eval_inputs: 8           # fixed test inputs used for TVD/BC/BD
+backdoor_shots: 2048
+backdoor_eval_inputs: 60
+
+# --- Backdoor experiment -----------------------------------------------------------------
+backdoor_datasets: [digits01, breast_cancer]   # 4-qubit z-encoding models
+backdoor_k: [1, 2, 3]
+backdoor_angle_hi: 1.5707963267948966          # pi/2 (top of the encoding range)
+
+# --- Detection ---------------------------------------------------------------------------
+cv_splits: 5
+detect_seeds: [0, 1, 2]

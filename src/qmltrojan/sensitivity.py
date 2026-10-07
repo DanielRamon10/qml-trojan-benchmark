@@ -65,38 +65,78 @@ def _data_marginal_counts(counts: dict[str, int], n_data: int) -> dict[str, int]
     return out
 
 
+def prepare_bound(circuit: QuantumCircuit, X: np.ndarray,
+                  sim: AerSimulator | None = None) -> list[QuantumCircuit]:
+    """Transpile ``circuit`` once and bind each row of ``X`` (reused across shot repetitions).
+
+    Transpilation is the dominant cost per circuit, so we do it a single time here and only
+    re-run the resulting concrete circuits with different simulator seeds downstream.
+    """
+    sim = sim or AerSimulator()
+    compiled = transpile(circuit, sim, optimization_level=0)
+    Xa = align_inputs(circuit, X)
+    return [compiled.assign_parameters(x) for x in Xa]
+
+
+def run_bound(bound: list[QuantumCircuit], shots: int, seed: int, n_data: int,
+              sim: AerSimulator | None = None) -> list[dict[str, int]]:
+    """Run pre-bound circuits once and return data-register counts per input."""
+    sim = sim or AerSimulator()
+    result = sim.run(bound, shots=shots, seed_simulator=seed).result()
+    return [_data_marginal_counts(result.get_counts(i), n_data) for i in range(len(bound))]
+
+
 def simulate_counts(circuit: QuantumCircuit, X: np.ndarray, shots: int, seed: int,
                     n_data: int | None = None) -> list[dict[str, int]]:
     """Run ``circuit`` on each row of ``X`` and return data-register counts per input."""
-    sim = AerSimulator(seed_simulator=seed)
-    compiled = transpile(circuit, sim, optimization_level=0)
     n_data = circuit.num_clbits if n_data is None else n_data
-    Xa = align_inputs(circuit, X)
-    bound = [compiled.assign_parameters(x) for x in Xa]
-    result = sim.run(bound, shots=shots, seed_simulator=seed).result()
-    return [_data_marginal_counts(result.get_counts(i), n_data) for i in range(len(Xa))]
+    sim = AerSimulator(seed_simulator=seed)
+    return run_bound(prepare_bound(circuit, X, sim), shots, seed, n_data, sim)
+
+
+def golden_count_sets(golden: QuantumCircuit, X: np.ndarray, shots: int, reps: int,
+                      seed: int, n_data: int) -> tuple[list, list, list[int]]:
+    """Pre-simulate the golden circuit for all reps (two independent sets per rep).
+
+    Returned as ``(set_a, set_b, infected_seeds)`` so that the expensive golden simulation is
+    shared across every infected variant of the same base model.
+    """
+    sim = AerSimulator()
+    bound = prepare_bound(golden, X, sim)
+    rng = np.random.default_rng(seed)
+    set_a, set_b, inf_seeds = [], [], []
+    for _ in range(reps):
+        sa, sb, sc = (int(v) for v in rng.integers(0, 2**31, size=3))
+        set_a.append(run_bound(bound, shots, sa, n_data, sim))
+        set_b.append(run_bound(bound, shots, sb, n_data, sim))
+        inf_seeds.append(sc)
+    return set_a, set_b, inf_seeds
 
 
 def distribution_metrics(golden: QuantumCircuit, infected: QuantumCircuit, X: np.ndarray,
                          shots: int = 512, reps: int = 15, seed: int = 0,
-                         n_data: int | None = None) -> dict:
+                         n_data: int | None = None,
+                         golden_sets: tuple[list, list, list[int]] | None = None) -> dict:
     """Mean/std TVD, BC, BD between golden and infected over ``reps`` shot sets.
 
     A golden-vs-golden baseline (two independent shot sets of the golden circuit) is computed
-    with the same budget so the trojan signal can be read against the sampling floor.
+    with the same budget so the trojan signal can be read against the sampling floor. Pass
+    ``golden_sets`` (from :func:`golden_count_sets`) to reuse golden simulations across variants.
     """
     n_data = golden.num_clbits if n_data is None else n_data
     n_out = 2 ** n_data
     index = {format(i, f"0{n_data}b"): i for i in range(n_out)}
-    rng = np.random.default_rng(seed)
 
+    if golden_sets is None:
+        golden_sets = golden_count_sets(golden, X, shots, reps, seed, n_data)
+    set_a, set_b, inf_seeds = golden_sets
+
+    sim = AerSimulator()
+    inf_bound = prepare_bound(infected, X, sim)
     tvds, bcs, bds, base_tvds = [], [], [], []
     for r in range(reps):
-        s1, s2, s3 = (int(x) for x in rng.integers(0, 2**31, size=3))
-        g1 = simulate_counts(golden, X, shots, s1, n_data)
-        g2 = simulate_counts(golden, X, shots, s2, n_data)
-        inf = simulate_counts(infected, X, shots, s3, n_data)
-        for ci_g1, ci_g2, ci_inf in zip(g1, g2, inf, strict=True):
+        inf = run_bound(inf_bound, shots, inf_seeds[r], n_data, sim)
+        for ci_g1, ci_g2, ci_inf in zip(set_a[r], set_b[r], inf, strict=True):
             p = _probs(ci_g1, n_out, index)
             q = _probs(ci_inf, n_out, index)
             pb = _probs(ci_g2, n_out, index)
