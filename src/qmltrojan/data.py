@@ -20,7 +20,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 DATASETS: tuple[str, ...] = ("iris", "digits01", "breast_cancer")
-DEFAULT_FEATURE_RANGE: tuple[float, float] = (0.0, float(np.pi))
+#: Encoding interval. Both feature maps apply a phase ``P(2x)``, whose period in ``x`` is
+#: ``pi``: with ``x`` in ``[0, pi]`` the two ends of the range encode the *same* state (and
+#: on binary Iris the classes sit exactly at the two ends of the first PCA component).
+#: ``[0, pi/2]`` maps each feature injectively onto half of the phase circle.
+DEFAULT_FEATURE_RANGE: tuple[float, float] = (0.0, float(np.pi / 2))
 
 
 @dataclass
