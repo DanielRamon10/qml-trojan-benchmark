@@ -1,0 +1,20 @@
+# Pinned versions used to produce the published results (Python 3.12.10, Windows 11, CPU only).
+qiskit==2.5.2
+qiskit-aer==0.17.2
+qiskit-machine-learning==0.9.1
+qiskit-qasm3-import==0.6.0
+openqasm3==1.0.1
+numpy==2.5.3
+scipy==1.18.1
+scikit-learn==1.9.1
+pandas==3.0.6
+matplotlib==3.11.2
+shap==0.52.0
+PyYAML==6.0.3
+
+# Development / notebook
+pytest==9.1.1
+ruff==0.16.10
+nbformat==5.11.1
+nbconvert==7.17.1
+ipykernel==7.4.0

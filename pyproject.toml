@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qmltrojan"
+version = "0.1.0"
+description = "Benchmark of gate-insertion trojans and triggered backdoors in variational quantum classifiers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "qiskit>=2.5,<3",
+    "qiskit-aer>=0.17,<0.18",
+    "qiskit-machine-learning>=0.9,<0.10",
+    "qiskit-qasm3-import>=0.6",
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "scikit-learn>=1.6",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "shap>=0.46",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "nbformat>=5.10", "nbconvert>=7.16", "ipykernel>=6.29"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "NPY", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["slow: end-to-end tests (quick pipeline, a few minutes)"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::PendingDeprecationWarning"]
