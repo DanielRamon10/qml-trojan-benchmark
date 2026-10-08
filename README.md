@@ -1,5 +1,9 @@
 # qml-trojan-benchmark
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Qiskit](https://img.shields.io/badge/Qiskit-2.5-6929C4.svg)](https://www.ibm.com/quantum/qiskit)
+
 **Security of Quantum Machine Learning against trojan / backdoor insertion.**
 
 A reproducible, laptop-scale benchmark that studies what happens when a compromised quantum
