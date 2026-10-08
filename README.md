@@ -283,6 +283,21 @@ here because their bibliographic data could not be confirmed — add them marked
 
 ---
 
+## Citation
+
+If you use this software or its results, please cite it using the metadata in
+[`CITATION.cff`](CITATION.cff) (GitHub renders a "Cite this repository" button from it). Example:
+
+```bibtex
+@software{ramon_qml_trojan_benchmark_2026,
+  author  = {Ramon, Daniel},
+  title   = {qml-trojan-benchmark: Security of Quantum Machine Learning against trojan/backdoor insertion},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/DanielRamon10/qml-trojan-benchmark}
+}
+```
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).

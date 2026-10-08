@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+title: >-
+  qml-trojan-benchmark: Security of Quantum Machine Learning
+  against trojan/backdoor insertion
+message: >-
+  If you use this software or its results, please cite it using
+  the metadata from this file.
+type: software
+authors:
+  - given-names: Daniel
+    family-names: Ramon
+    email: 81169421+DanielRamon10@users.noreply.github.com
+repository-code: 'https://github.com/DanielRamon10/qml-trojan-benchmark'
+url: 'https://github.com/DanielRamon10/qml-trojan-benchmark'
+abstract: >-
+  A reproducible, laptop-scale benchmark studying the security of
+  variational quantum classifiers (VQCs) against trojan/backdoor
+  insertion by a compromised quantum software-supply-chain component
+  (a malicious Qiskit transpiler pass). It bridges trojan detection in
+  quantum circuits and Quantum Adversarial Machine Learning (QAML),
+  measuring the behavioural and classification-accuracy impact of
+  single-gate insertions (TVD/BC/BD vs a sampling baseline), a
+  triggered conditional backdoor (attack success rate vs clean
+  accuracy), and text-based (BoW/TF-IDF) detection of infected circuits.
+keywords:
+  - quantum machine learning
+  - quantum adversarial machine learning
+  - hardware trojan
+  - backdoor attack
+  - variational quantum classifier
+  - software supply chain security
+  - Qiskit
+  - OpenQASM
+version: 0.1.0
+date-released: '2026-10-07'
+license: MIT
