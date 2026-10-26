@@ -12,4 +12,4 @@ explain      SHAP explanations of what drives trojan impact
 plotting     shared figure helpers
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

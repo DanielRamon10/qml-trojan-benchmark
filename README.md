@@ -359,7 +359,7 @@ If you use this software or its results, please cite it using the metadata in
   author  = {Ramon, Daniel},
   title   = {qml-trojan-benchmark: Security of Quantum Machine Learning against trojan/backdoor insertion},
   year    = {2026},
-  version = {0.1.0},
+  version = {0.2.0},
   url     = {https://github.com/DanielRamon10/qml-trojan-benchmark}
 }
 ```
