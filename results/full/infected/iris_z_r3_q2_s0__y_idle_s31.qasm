@@ -23,7 +23,7 @@ ry(2.5953569334027744) _qubit0;
 ry(2.906555087073364) _qubit1;
 cx _qubit0, _qubit1;
 ry(1.8073045632367952) _qubit0;
-y _qubit0;
+y _qubit1;
 ry(1.4442899975187924) _qubit1;
 barrier _qubit0, _qubit1;
 meas[0] = measure _qubit0;
