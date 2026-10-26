@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from qmltrojan.detect import _undersample_train, run_detection
+from qmltrojan.detect import _undersample_train, run_detection, run_detection_grid
 
 
 def _toy_corpus(n_models: int = 6, variants: int = 8):
@@ -56,3 +56,14 @@ def test_groupkfold_separates_models():
     summary, _ = run_detection(texts, labels, groups, "count", "linsvc", "group",
                                n_splits=3, seed=0)
     assert summary["recall_mean"] > 0.5
+
+
+def test_arch_scheme_holds_out_whole_architectures():
+    texts, labels, groups = _toy_corpus(n_models=6)
+    archs = groups % 3  # 3 "architectures", 2 models each
+    df, cms = run_detection_grid(texts, labels, groups, n_splits=3, seed=0, arch_groups=archs)
+    assert set(df["cv"]) == {"group", "arch", "stratified"}
+    assert all(cm.sum() == len(texts) for cm in cms.values())
+    # Without architecture ids the arch scheme is skipped rather than silently mis-grouped.
+    df_no_arch, _ = run_detection_grid(texts, labels, groups, n_splits=3, seed=0)
+    assert "arch" not in set(df_no_arch["cv"])

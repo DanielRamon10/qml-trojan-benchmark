@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/run_all.py --quick     # minutes, validates the whole pipeline
-    python scripts/run_all.py             # full benchmark (~40-50 min on a laptop)
+    python scripts/run_all.py             # full benchmark (~2.5 h on a laptop CPU)
 """
 
 from __future__ import annotations

@@ -14,9 +14,11 @@ Two attack families are implemented:
 * :class:`SingleGateInsertionPass` -- inserts **one** gate from {H, T, X, Y, Z} at a
   position chosen by one of three modes (``random``, ``idle`` layer of the DAG, or
   ``controlled``). This mirrors the sensitivity-analysis dataset of the quantum-trojan paper.
-* :func:`insert_backdoor` -- a QAML-specific triggered backdoor that flips the classifier's
+* :func:`build_backdoor` -- a QAML-specific triggered backdoor that flips the classifier's
   output only for inputs matching a trigger pattern, while leaving other inputs (nearly)
-  untouched.
+  untouched. Unlike the single-gate trojan it is *not* a ``TransformationPass``: the circuit
+  is assembled directly (feature map, detector, ansatz, conditional flip) to model what such a
+  pass would emit, and it is not unrolled to the clean basis.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from qiskit.circuit.library import HGate, TGate, XGate, YGate, ZGate, z_feature_
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 from qiskit.transpiler import PassManager, TransformationPass
 
-from qmltrojan.io_qasm import circuit_stats, wire_operations
+from qmltrojan.io_qasm import circuit_stats
 from qmltrojan.vqc import VQCSpec, build_ansatz, build_feature_map
 
 #: Single-qubit gates the attacker may insert, keyed by their QASM name.
@@ -110,12 +112,13 @@ class SingleGateInsertionPass(TransformationPass):
         circuit = dag_to_circuit(dag)
         rng = np.random.default_rng(self.spec.seed)
         n_qubits = circuit.num_qubits
-        wires = wire_operations(circuit)
+        # Positions index the *real* operations of a wire (no barrier/measure), so the valid
+        # range is 0..n_real inclusive, where n_real means "after the last gate".
+        n_real = _real_ops_per_wire(circuit)
 
         if self.spec.mode == "random":
             qubit = int(rng.integers(n_qubits))
-            n_ops = len(wires[qubit])
-            op_position = int(rng.integers(n_ops + 1)) if n_ops else 0
+            op_position = int(rng.integers(n_real[qubit] + 1))
             place = "random"
         elif self.spec.mode == "idle":
             qubit, op_position, place = self._idle_slot(circuit, rng)
@@ -125,7 +128,7 @@ class SingleGateInsertionPass(TransformationPass):
                 op_position = int(self.fm_ops_per_qubit.get(qubit, 0))
                 place = "interface"
             else:
-                op_position = int(round(self.spec.position * len(wires[qubit])))
+                op_position = int(round(self.spec.position * n_real[qubit]))
                 place = "fractional"
 
         new_circuit = self._insert_in_circuit(circuit, qubit, op_position)
@@ -145,9 +148,19 @@ class SingleGateInsertionPass(TransformationPass):
         We scan DAG layers; in each layer the qubits not touched by any op are "idle" at
         that depth. We pick one uniformly. If none exists (fully dense circuit) we fall
         back to a random wire position.
+
+        Two corrections keep the sampling from collapsing onto the end of the circuit, where a
+        diagonal gate right before measurement is a no-op:
+
+        * layers holding only directives/measurements (the final barrier and ``measure``
+          layers) are skipped, since every qubit looks "idle" there;
+        * we sample uniformly over *distinct* insertion points. A qubit that stays idle for
+          several consecutive layers (in particular one that has finished its gates while
+          others are still running) yields the same ``(qubit, op_position)`` in each of them,
+          and all of those produce the identical infected circuit.
         """
         dag = circuit_to_dag(circuit)
-        candidates: list[tuple[int, int]] = []
+        candidates: set[tuple[int, int]] = set()
         # ops seen per wire up to the current layer = op_position to insert at.
         seen = {q: 0 for q in range(circuit.num_qubits)}
         for layer in dag.layers():
@@ -157,16 +170,30 @@ class SingleGateInsertionPass(TransformationPass):
                     continue
                 for q in node.qargs:
                     active.add(circuit.find_bit(q).index)
+            if not active:  # barrier/measure-only layer: no gate runs, nothing is "idle"
+                continue
             for q in range(circuit.num_qubits):
                 if q not in active:
-                    candidates.append((q, seen[q]))
+                    candidates.add((q, seen[q]))
             for q in active:
                 seen[q] += 1
         if not candidates:
             q = int(rng.integers(circuit.num_qubits))
-            return q, int(rng.integers(len(wire_operations(circuit)[q]) + 1)), "random-fallback"
-        q, pos = candidates[int(rng.integers(len(candidates)))]
+            return q, int(rng.integers(_real_ops_per_wire(circuit)[q] + 1)), "random-fallback"
+        ordered = sorted(candidates)  # deterministic order for seeded sampling
+        q, pos = ordered[int(rng.integers(len(ordered)))]
         return q, pos, "idle"
+
+
+def _real_ops_per_wire(circuit: QuantumCircuit) -> dict[int, int]:
+    """Number of real operations (excluding barriers and measurements) on each qubit."""
+    counts = {q: 0 for q in range(circuit.num_qubits)}
+    for inst in circuit.data:
+        if inst.operation.name in ("barrier", "measure"):
+            continue
+        for qubit in inst.qubits:
+            counts[circuit.find_bit(qubit).index] += 1
+    return counts
 
 
 def _append_before_measure(circuit: QuantumCircuit, gate: Gate,
@@ -204,6 +231,10 @@ def apply_trojan(golden: QuantumCircuit, spec: TrojanSpec) -> tuple[QuantumCircu
 
     record = dict(asdict(spec))
     record.update(pass_.record or {})
+    # True when the gate follows the wire's last real gate, i.e. sits right before measurement
+    # (where a diagonal Z/T gate commutes with the Z-basis readout and is a no-op).
+    n_real = _real_ops_per_wire(golden)
+    record["at_wire_end"] = bool(record["op_position"] >= n_real[record["qubit"]])
     record.update(
         depth_before=before["depth"],
         depth_after=after["depth"],
@@ -227,8 +258,9 @@ class BackdoorSpec:
     """Specification of a triggered backdoor (stealthy conditional trojan).
 
     The trigger is "the first ``k_trigger`` data qubits all encode a feature at the top of the
-    encoding range ``angle_hi``". A compromised pass inserts, *between the feature map and the
-    ansatz*, a constant detector: on each trigger qubit it applies the inverse single-qubit
+    encoding range ``angle_hi``". The circuit models what a compromised pass would emit (it is
+    assembled directly, not run through a ``PassManager``): *between the feature map and the
+    ansatz* sits a constant detector that, on each trigger qubit, applies the inverse single-qubit
     encoding evaluated at the fixed trigger angle, ``U_enc(angle_hi)^dagger``. An input encoded
     at exactly ``angle_hi`` is sent back to ``|0>``; a multi-controlled-X (controls-on-zero via
     surrounding ``X`` gates) then sets an ancilla, and the encoding is recomputed so the data
@@ -239,8 +271,16 @@ class BackdoorSpec:
     Because ``U_enc`` is a single-qubit (product) operation, the detector is *exact* for the
     ``z`` encoding. For the entangling ``zz`` encoding the per-qubit uncompute is only
     approximate, so the attack degrades -- a limitation we measure and report honestly.
-    Selectivity grows with ``k_trigger``: requiring several qubits at ``angle_hi`` at once makes
-    the trigger rarer, reducing leakage onto clean inputs.
+
+    The detector is a *soft* threshold, not an exact-match test. For the ``z`` encoding with
+    ``reps=2`` and ``angle_hi = pi/2``, a trigger qubit encoding ``x`` returns to ``|0>`` with
+    probability ``sin^2(x)`` (0 at ``x=0``, 0.5 at ``x=pi/4``, 1 at ``x=pi/2``), and the ancilla
+    fires with the product of these probabilities over the ``k`` trigger qubits. The class flips
+    whenever the firing probability exceeds 1/2, so with ``k=1`` any clean input with
+    ``x_0 > pi/4`` is flipped. Selectivity grows with ``k_trigger`` because the product shrinks,
+    which is what reduces leakage onto clean inputs. When the firing probability is strictly
+    between 0 and 1, measuring the ancilla also partially collapses the data qubits, a second
+    (smaller) source of leakage.
     """
 
     k_trigger: int = 2
