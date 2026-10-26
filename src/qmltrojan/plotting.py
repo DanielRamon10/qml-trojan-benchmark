@@ -88,22 +88,70 @@ def bar_importance(importance: pd.DataFrame, path: str | Path, title: str,
 
 def grouped_bars(df: pd.DataFrame, index: str, columns: str, value: str,
                  path: str | Path, title: str, ylabel: str) -> Path:
-    """Grouped bar chart of ``value`` pivoted by ``index`` (x) and ``columns`` (series)."""
+    """Grouped bar chart of ``value`` pivoted by ``index`` (x) and ``columns`` (series).
+
+    Colors are assigned in fixed palette order and never cycled: more series than palette
+    slots would silently repeat a color, so it raises instead (facet the data, see
+    :func:`faceted_bars`).
+    """
     pivot = df.pivot_table(index=index, columns=columns, values=value, aggfunc="mean")
     cats = list(pivot.index)
     series = list(pivot.columns)
+    if len(series) > len(PALETTE):
+        raise ValueError(f"{len(series)} series exceed the {len(PALETTE)}-color palette; "
+                         "facet the chart instead of cycling colors")
     x = np.arange(len(cats))
     width = 0.8 / max(len(series), 1)
     fig, ax = plt.subplots(figsize=(1.3 * len(cats) + 2.5, 4.2))
     for j, s in enumerate(series):
         ax.bar(x + j * width, pivot[s].to_numpy(), width=width * 0.92,
-               label=str(s), color=PALETTE[j % len(PALETTE)], edgecolor="white")
+               label=str(s), color=PALETTE[j], edgecolor="white")
     ax.set_xticks(x + width * (len(series) - 1) / 2)
     ax.set_xticklabels(cats, rotation=20, ha="right")
     ax.set_xlabel(index)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.legend(title=columns, frameon=False)
+    return _save(fig, path)
+
+
+def faceted_bars(df: pd.DataFrame, facet: str, index: str, columns: str, value: str,
+                 path: str | Path, title: str, ylabel: str,
+                 facet_order: list[str] | None = None,
+                 facet_titles: dict[str, str] | None = None) -> Path:
+    """Small multiples of grouped bars: one panel per ``facet`` value, shared 0-1 y-axis.
+
+    Within each panel ``index`` is the x-axis and ``columns`` the series, colored in fixed
+    palette order (the same series keeps the same color in every panel). Faceting keeps the
+    series count per panel small instead of encoding a second variable with near-identical
+    shades of one hue, which full-color readers cannot tell apart on adjacent bars.
+    """
+    facets = facet_order or sorted(df[facet].dropna().unique())
+    series = sorted(df[columns].dropna().unique())
+    if len(series) > len(PALETTE):
+        raise ValueError(f"{len(series)} series exceed the {len(PALETTE)}-color palette")
+    colors = {s: PALETTE[j] for j, s in enumerate(series)}
+    cats = sorted(df[index].dropna().unique())
+    x = np.arange(len(cats))
+    width = 0.8 / len(series)
+    fig, axes = plt.subplots(1, len(facets), figsize=(3.6 * len(facets) + 0.6, 4.2),
+                             sharey=True, squeeze=False)
+    for ax, f in zip(axes[0], facets, strict=True):
+        pivot = df[df[facet] == f].pivot_table(index=index, columns=columns, values=value,
+                                               aggfunc="mean").reindex(index=cats, columns=series)
+        for j, s in enumerate(series):
+            # White edges leave a surface gap between adjacent bars.
+            ax.bar(x + j * width, pivot[s].to_numpy(), width=width, label=str(s),
+                   color=colors[s], edgecolor=SURFACE, linewidth=2)
+        ax.set_xticks(x + width * (len(series) - 1) / 2)
+        ax.set_xticklabels(cats, rotation=20, ha="right")
+        ax.set_title((facet_titles or {}).get(f, str(f)), fontsize=11)
+        ax.set_ylim(0, 1.05)
+        ax.grid(axis="x", visible=False)
+    axes[0][0].set_ylabel(ylabel)
+    axes[0][-1].legend(title=columns, frameon=False, loc="upper left", bbox_to_anchor=(1.0, 1.0))
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
     return _save(fig, path)
 
 

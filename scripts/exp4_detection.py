@@ -34,7 +34,7 @@ from _common import (
 )
 
 from qmltrojan.detect import format_mean_std, run_detection_grid
-from qmltrojan.plotting import confusion_grid, grouped_bars
+from qmltrojan.plotting import confusion_grid, faceted_bars
 
 LOG = get_logger("exp4")
 
@@ -162,15 +162,25 @@ def _summarize(detection: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _figures(detection: pd.DataFrame, confusions: dict, paths) -> None:
+CV_PANELS = ["arch", "group", "stratified"]  # most realistic -> most optimistic
+CV_TITLES = {"arch": "leave-architecture-out", "group": "GroupKFold (by model)",
+             "stratified": "StratifiedKFold"}
+
+
+def _bar_figures(detection: pd.DataFrame, paths) -> None:
+    """Metric bars: one panel per CV scheme, count (blue) vs tfidf (orange) per classifier."""
     for metric, fname, title in (
         ("recall_mean", "detection_recall.png", "Detection recall (positive = infected)"),
         ("balanced_accuracy_mean", "detection_balacc.png", "Detection balanced accuracy"),
     ):
-        tmp = detection.copy()
-        tmp["rep_cv"] = tmp["vectorizer"] + "/" + tmp["cv"]
-        grouped_bars(tmp, "classifier", "rep_cv", metric, paths.figures / fname, title,
-                     metric.replace("_mean", ""))
+        faceted_bars(detection, "cv", "classifier", "vectorizer", metric, paths.figures / fname,
+                     title, metric.replace("_mean", ""),
+                     facet_order=[c for c in CV_PANELS if c in set(detection["cv"])],
+                     facet_titles=CV_TITLES)
+
+
+def _figures(detection: pd.DataFrame, confusions: dict, paths) -> None:
+    _bar_figures(detection, paths)
     for cv, fname, title in (
         ("group", "confusions_group.png", "Confusion matrices -- GroupKFold (by base model)"),
         ("arch", "confusions_arch.png", "Confusion matrices -- leave-architecture-out"),
