@@ -1,4 +1,4 @@
-# Full benchmark configuration (CPU, <= 6 qubits). Target runtime ~40-50 min on 14 cores.
+# Full benchmark configuration (CPU, 2 or 4 data qubits, +1 ancilla for the backdoor).
 name: full
 
 # --- Golden VQC grid ---------------------------------------------------------------------

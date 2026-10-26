@@ -2,12 +2,17 @@
 
 This replicates the detection table of the quantum-trojan sensitivity paper. Each compiled
 circuit is serialized to OpenQASM and vectorized as text (bag-of-words or TF-IDF, with unigrams
-and bigrams). Four classifiers are compared under two cross-validation schemes:
+and bigrams). Four classifiers are compared under three cross-validation schemes:
 
-* **GroupKFold** keeps *all variants of one base VQC in the same fold*, so the detector is
-  tested on circuit families it has never seen -- the realistic deployment question.
-* **StratifiedKFold** ignores families; it is the optimistic baseline and typically scores
-  higher, which is itself an informative contrast.
+* ``group`` -- **GroupKFold by base model**: all variants of one trained VQC stay in the same
+  fold, so no golden/infected pair of the same model is split across train and test. Note that
+  models sharing an *architecture* (encoding x ansatz reps x qubits) but differing in dataset or
+  seed have structurally identical QASM (only the numeric angles differ), so this scheme still
+  shows the detector the test architectures during training.
+* ``arch`` -- **GroupKFold by architecture** (leave-architecture-out): every model of a given
+  architecture is held out together, so the detector is tested on circuit *structures* it has
+  never seen -- the realistic deployment question.
+* ``stratified`` -- **StratifiedKFold** ignores families; it is the optimistic baseline.
 
 The positive class is ``infected`` and it is the *majority* (many infected variants per golden).
 To avoid a detector that trivially flags everything, we (a) random-undersample the majority class
@@ -68,7 +73,7 @@ def make_classifier(name: str, class_weight: str | None):
 
 CLASSIFIERS: tuple[str, ...] = ("logreg", "linsvc", "multinb", "complnb")
 VECTORIZERS: tuple[str, ...] = ("count", "tfidf")
-CV_SCHEMES: tuple[str, ...] = ("group", "stratified")
+CV_SCHEMES: tuple[str, ...] = ("group", "arch", "stratified")
 
 
 def _undersample_train(idx: np.ndarray, y: np.ndarray, seed: int) -> np.ndarray:
@@ -100,6 +105,10 @@ def run_detection(texts: list[str], labels: np.ndarray, groups: np.ndarray,
                   n_splits: int = 5, seed: int = 0) -> tuple[dict, np.ndarray]:
     """Cross-validated detection for one (vectorizer, classifier, cv) combination.
 
+    For the ``group`` and ``arch`` schemes, ``groups`` holds the grouping to keep together
+    (base-model ids or architecture ids, respectively); both run a GroupKFold with at most
+    as many folds as there are groups.
+
     Returns a metrics dict (mean/std across folds) and the summed confusion matrix.
     """
     labels = np.asarray(labels)
@@ -107,8 +116,8 @@ def run_detection(texts: list[str], labels: np.ndarray, groups: np.ndarray,
     use_weight = classifier in ("logreg", "linsvc")
     class_weight = "balanced" if use_weight else None
 
-    if cv_scheme == "group":
-        splitter = GroupKFold(n_splits=n_splits)
+    if cv_scheme in ("group", "arch"):
+        splitter = GroupKFold(n_splits=min(n_splits, len(np.unique(groups))))
         split_iter = splitter.split(texts, labels, groups)
     elif cv_scheme == "stratified":
         splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
@@ -155,14 +164,23 @@ def run_detection(texts: list[str], labels: np.ndarray, groups: np.ndarray,
 
 def run_detection_grid(texts: list[str], labels: np.ndarray, groups: np.ndarray,
                        n_splits: int = 5, seed: int = 0,
+                       arch_groups: np.ndarray | None = None,
                        ) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
-    """Run every (vectorizer x classifier x cv) combination; return a table and confusions."""
+    """Run every (vectorizer x classifier x cv) combination; return a table and confusions.
+
+    ``groups`` are base-model ids (``group`` scheme); ``arch_groups`` are architecture ids for
+    the leave-architecture-out ``arch`` scheme, which is skipped when not given or when there
+    are fewer than two architectures.
+    """
     rows: list[dict] = []
     confusions: dict[str, np.ndarray] = {}
     for cv in CV_SCHEMES:
+        cv_groups = arch_groups if cv == "arch" else groups
+        if cv == "arch" and (arch_groups is None or len(np.unique(arch_groups)) < 2):
+            continue
         for vec in VECTORIZERS:
             for clf in CLASSIFIERS:
-                summary, cm = run_detection(texts, labels, groups, vec, clf, cv,
+                summary, cm = run_detection(texts, labels, cv_groups, vec, clf, cv,
                                             n_splits=n_splits, seed=seed)
                 rows.append(summary)
                 confusions[f"{cv}_{vec}_{clf}"] = cm

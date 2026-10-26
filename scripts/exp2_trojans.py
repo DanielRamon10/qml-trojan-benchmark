@@ -2,19 +2,24 @@
 
 For every golden VQC we insert ``variants_per_model`` single-gate trojans (one per gate x mode
 combination). For each variant we measure, on a fixed set of test inputs, the output-distribution
-shift (TVD/BC/BD vs a golden-vs-golden sampling baseline) and the exact classification accuracy
-(and its drop from golden). A RandomForest + SHAP analysis then ranks which structural attributes
-drive the mean TVD and the accuracy drop.
+shift (TVD/BC/BD vs a golden-vs-golden sampling baseline), the exact classification accuracy
+(and its drop from golden) and the prediction flip rate (fraction of test inputs whose predicted
+label differs from golden). The flip rate is reported because the accuracy drop understates the
+impact on weak models: a parity-flipping trojan maps accuracy ``a`` to ``1 - a``, which is a small
+"drop" when ``a`` is close to 0.5 even though nearly every prediction changed. A RandomForest +
+SHAP analysis then ranks which structural attributes drive the mean TVD, the accuracy drop and
+the flip rate.
 
 Outputs (under ``results/<mode>/``):
 * ``infected/<...>.qasm``   -- each infected circuit
 * ``metadata.csv``          -- per-variant provenance + structural stats
-* ``sensitivity.csv``       -- per-variant TVD/BC/BD + clean/infected accuracy + drop
+* ``sensitivity.csv``       -- per-variant TVD/BC/BD + clean/infected accuracy + drop + flip rate
 * ``inventory.csv``         -- every QASM file with size and SHA-256
 * ``errors.csv``            -- any variant that failed (empty if all succeeded)
-* ``shap_tvd.csv`` / ``shap_accuracy_drop.csv`` -- SHAP importances
+* ``shap_tvd.csv`` / ``shap_accuracy_drop.csv`` / ``shap_flip_rate.csv`` -- SHAP importances
 * figures: ``tvd_by_gate.png``, ``tvd_by_mode.png``, ``tvd_by_nqubits.png``,
-  ``accdrop_by_gate.png``, ``shap_tvd.png``, ``shap_accuracy_drop.png``
+  ``accdrop_by_gate.png``, ``flip_by_gate.png``, ``shap_tvd.png``, ``shap_accuracy_drop.png``,
+  ``shap_flip_rate.png``
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ from qmltrojan.io_qasm import load_qasm, save_qasm, sha256_text
 from qmltrojan.plotting import bar_importance, violin_strip_by
 from qmltrojan.sensitivity import distribution_metrics, golden_count_sets
 from qmltrojan.trojan import TrojanSpec, apply_trojan
-from qmltrojan.vqc import VQCSpec, accuracy, compile_golden
+from qmltrojan.vqc import VQCSpec, compile_golden, predict
 
 LOG = get_logger("exp2")
 
@@ -78,7 +83,8 @@ def main() -> None:
             X_eval = data.X_test[:n_inputs]
             n_data = spec.n_qubits
 
-            acc_clean = accuracy(golden, data.X_test, data.y_test)
+            pred_clean = predict(golden, data.X_test)
+            acc_clean = float(np.mean(pred_clean == data.y_test))
             # Pre-simulate the golden circuit once; reuse across all variants of this model.
             gsets = golden_count_sets(golden, X_eval, cfg["shots"], cfg["sim_reps"],
                                       seed=spec.seed, n_data=n_data)
@@ -89,8 +95,9 @@ def main() -> None:
                     fname = f"{model_id}__{ts.gate}_{ts.mode}_s{ts.seed}.qasm"
                     save_qasm(infected, paths.infected / fname)
                     # QASM round-trip guards that the serialized artifact is faithful.
-                    acc_inf = accuracy(load_qasm(paths.infected / fname), data.X_test,
-                                       data.y_test)
+                    pred_inf = predict(load_qasm(paths.infected / fname), data.X_test)
+                    acc_inf = float(np.mean(pred_inf == data.y_test))
+                    flip_rate = float(np.mean(pred_inf != pred_clean))
 
                     record.update(model_id=model_id, dataset=spec.dataset,
                                   encoding=spec.encoding, ansatz_reps=spec.ansatz_reps,
@@ -102,13 +109,14 @@ def main() -> None:
                                                n_data=n_data, golden_sets=gsets)
                     met.update(model_id=model_id, qasm_file=fname, gate=ts.gate, mode=ts.mode,
                                placement=record["placement"], qubit=record["qubit"],
-                               op_position=record["op_position"], encoding=spec.encoding,
+                               op_position=record["op_position"],
+                               at_wire_end=record["at_wire_end"], encoding=spec.encoding,
                                n_qubits=spec.n_qubits, ansatz_reps=spec.ansatz_reps,
                                family=record["family"], depth_before=record["depth_before"],
                                depth_delta=record["depth_delta"], size_before=record["size_before"],
                                size_delta=record["size_delta"], dataset=spec.dataset,
                                acc_clean=acc_clean, acc_infected=acc_inf,
-                               accuracy_drop=acc_clean - acc_inf)
+                               accuracy_drop=acc_clean - acc_inf, flip_rate=flip_rate)
                     sens_rows.append(met)
                 except Exception as exc:  # noqa: BLE001 - record and continue
                     err_rows.append({"model_id": model_id, "gate": ts.gate, "mode": ts.mode,
@@ -124,9 +132,9 @@ def main() -> None:
     sens_df.to_csv(paths.root / "sensitivity.csv", index=False)
     pd.DataFrame(err_rows).to_csv(paths.root / "errors.csv", index=False)
     _write_inventory(paths)
-    LOG.info("TVD mean=%.3f (baseline %.3f). Mean accuracy drop=%.3f",
+    LOG.info("TVD mean=%.3f (baseline %.3f). Mean accuracy drop=%.3f, mean flip rate=%.3f",
              sens_df["tvd_mean"].mean(), sens_df["tvd_baseline_mean"].mean(),
-             sens_df["accuracy_drop"].mean())
+             sens_df["accuracy_drop"].mean(), sens_df["flip_rate"].mean())
 
     _figures(sens_df, paths)
     _shap(sens_df, paths)
@@ -155,12 +163,15 @@ def _figures(sens_df: pd.DataFrame, paths) -> None:
                     "Output-distribution shift (TVD) by number of qubits", baseline=base)
     violin_strip_by(sens_df, "accuracy_drop", "gate", paths.figures / "accdrop_by_gate.png",
                     "Classification accuracy drop by inserted gate")
+    violin_strip_by(sens_df, "flip_rate", "gate", paths.figures / "flip_by_gate.png",
+                    "Prediction flip rate (vs golden) by inserted gate")
 
 
 def _shap(sens_df: pd.DataFrame, paths) -> None:
     for target, tag, title in (
         ("tvd_mean", "tvd", "SHAP importance for mean TVD"),
         ("accuracy_drop", "accuracy_drop", "SHAP importance for accuracy drop"),
+        ("flip_rate", "flip_rate", "SHAP importance for prediction flip rate"),
     ):
         try:
             importance, _, _ = explain_target(sens_df, target)

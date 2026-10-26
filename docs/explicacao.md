@@ -24,8 +24,10 @@ O projeto é a ponte entre duas linhas:
 confiável — por exemplo, um *passe de transpilação* do Qiskit — foi comprometida e passa a
 **inserir operações durante a compilação** de um VQC já treinado. O atacante **não** controla o
 código-fonte do algoritmo, nem o provedor de nuvem, nem o hardware. O **defensor** tem acesso às
-versões *golden* (limpa) e *infected* e às suas **medições**. Esse cenário está implementado
-literalmente: o ataque é um `TransformationPass` dentro de um `PassManager` (ver §4).
+versões *golden* (limpa) e *infected* e às suas **medições**. Para o trojan de porta única, esse
+cenário está implementado literalmente: o ataque é um `TransformationPass` dentro de um
+`PassManager` (ver §5). O *backdoor* com gatilho, por sua vez, é **montado diretamente** (sem
+`PassManager`), modelando o circuito que um passe comprometido emitiria (ver §5).
 
 As três perguntas:
 
@@ -42,7 +44,8 @@ As três perguntas:
 - **Datasets binários:** Iris (setosa × versicolor), dígitos 0 vs 1 (`load_digits`) e Breast
   Cancer. Todos reduzidos a um problema **binário** com rótulos em {0, 1}.
 - **Por que PCA?** Cada *feature* é codificada em **um qubit** (codificação por ângulo). Como
-  trabalhamos com ≤ 6 qubits, reduzimos a dimensionalidade com `PCA(n_components = n_qubits)`.
+  trabalhamos com 2 ou 4 qubits de dados (no máximo 5 contando a ancila do *backdoor*), reduzimos
+  a dimensionalidade com `PCA(n_components = n_qubits)`.
 - **Pipeline `StandardScaler → PCA → MinMaxScaler`**, ajustado **apenas no treino** (sem vazamento
   para o teste). O `MinMaxScaler` leva as *features* para a **faixa de codificação**.
 - **Por que a faixa `[0, π/2]`?** Ambos os *feature maps* aplicam uma fase `P(2x)`, cujo período em
@@ -115,21 +118,41 @@ de portas) e um **SHA-256** por arquivo (inventário).
 ### Trojan de porta única (`SingleGateInsertionPass`)
 Um `TransformationPass` **de verdade** insere **uma** porta de `{H, T, X, Y, Z}`. Três **modos**:
 
-- **`random`**: posição aleatória (semente controlada).
-- **`idle`**: um ponto onde, naquela "camada" da DAG, o qubit está **ocioso** — inserção furtiva
-  que não aumenta a profundidade naquele instante.
+- **`random`**: qubit e posição aleatórios (semente controlada), uniformes entre as `n + 1`
+  posições de um fio com `n` portas reais (antes de cada porta ou depois da última). Barreiras e
+  medições não contam como posição.
+- **`idle`**: um ponto onde, naquela "camada" da DAG, o qubit está **ocioso** enquanto outro
+  qubit executa uma porta — inserção furtiva que não aumenta a profundidade naquele instante. Se o
+  circuito não tem nenhum ponto ocioso (ex.: codificação `z` com 2 qubits), cai num ponto
+  aleatório e o registro marca `placement = random-fallback`.
 - **`controlled`**: posição configurável; o padrão é a **fronteira codificação/ansatz**.
 
-Cada variante gera **metadados estruturados**: porta, modo, qubit, posição, profundidade e tamanho
-antes/depois (e seus deltas), família/origem, nº de qubits e bits clássicos.
+> **Correção metodológica (modo `idle`).** A primeira versão contava como "ociosas" as camadas
+> finais que só têm `barrier`/`measure` (nelas todo qubit parece ocioso) e contava várias vezes o
+> mesmo ponto quando um qubit ficava ocioso por camadas seguidas. Resultado: **65%** das inserções
+> `idle` caíam logo antes da medição, onde `Z`/`T` não fazem nada (TVD igual ao piso de
+> amostragem). Isso deixava o modo `idle` artificialmente "fraco". Agora essas camadas são
+> ignoradas e o sorteio é uniforme entre pontos de inserção **distintos**. Ainda sobram pontos no
+> fim do fio, mas são legítimos: um qubit que terminou suas portas enquanto outros continuam está,
+> de fato, ocioso. A coluna `at_wire_end` dos metadados registra se a inserção ficou depois da
+> última porta do fio.
+
+Cada variante gera **metadados estruturados**: porta, modo, qubit, posição (e se ficou no fim do
+fio), profundidade e tamanho antes/depois (e seus deltas), família/origem, nº de qubits e bits
+clássicos.
 
 **Intuição física que os resultados confirmam:** portas **diagonais** na base Z (`Z`, `T`) comutam
 com a medição de `Z`; se inseridas **logo antes da medição**, não mudam a classe. Mas inseridas na
 **interface** (antes do ansatz) elas são "espalhadas" pelo ansatz e passam a afetar a saída. Já
-`X`/`Y` invertem a paridade e têm grande impacto. Isso aparece nos gráficos `tvd_by_gate.png`.
+`X`/`Y` invertem a paridade e têm grande impacto. Isso aparece nos gráficos `tvd_by_gate.png`, e os
+números confirmam: `Z`/`T` logo antes da medição dão TVD 0,056 contra um piso de 0,055 e **nenhuma**
+predição invertida; em qualquer posição anterior, TVD 0,29 e taxa de inversão 0,25.
 
 ### Backdoor com gatilho (`build_backdoor`) — *conditional trojan*
-Segue a construção de **John et al. (2025)**. A ideia:
+Segue a construção de **John et al. (2025)**. Diferente do trojan de porta única, ele **não** é um
+`TransformationPass`: o circuito é montado diretamente (feature map → detector → ansatz → inversão
+condicional) para modelar o que um passe comprometido emitiria, e não é desdobrado para o *basis*
+limpo. O modelo de ameaça é o mesmo; só a implementação é mais direta. A ideia:
 
 1. O **gatilho** é "as primeiras `k` *features* estão no topo da faixa de codificação (`π/2`)".
 2. Logo **após o feature map e antes do ansatz**, um **detector constante** aplica, em cada qubit do
@@ -156,9 +179,26 @@ inversão **nítida** — exatamente o espírito do *stealthy conditional trojan
 documentamos** isso em vez de esconder. Por isso o experimento de backdoor roda sobre os modelos de
 4 qubits com codificação `z`.
 
-**Seletividade vs. vazamento:** quanto **maior** `k`, mais **raro** é o gatilho (exigir vários
-qubits em `π/2` ao mesmo tempo), então o **vazamento** sobre entradas limpas **cai** — a ASR
-permanece alta. É a história honesta do gráfico `backdoor_asr_vs_clean.png`.
+**O detector é um limiar suave, não um teste de igualdade.** "Volta a `|0⟩` em `π/2`" é verdade,
+mas uma entrada *perto* de `π/2` também volta quase toda. Para a codificação `z` (2 repetições)
+desfeita em `π/2`, um qubit que codifica `x` volta a `|0⟩` com probabilidade **exatamente
+`sin²(x)`** (há teste no `pytest`):
+
+| x | 0 | π/8 | π/4 | 3π/8 | π/2 |
+|---|---|---|---|---|---|
+| P(\|0⟩) | 0,00 | 0,15 | 0,50 | 0,85 | 1,00 |
+
+A ancila dispara com o **produto** dessas probabilidades nos `k` qubits do gatilho, e a classe
+inverte (por maioria dos *shots*) quando esse produto passa de 1/2. Com `k = 1`, portanto,
+**qualquer entrada limpa com `x₀ > π/4` tem a classe invertida** — metade da faixa de codificação.
+Isso explica a grande queda de acurácia limpa em `k = 1`.
+
+**Seletividade vs. vazamento:** quanto **maior** `k`, menor o produto das probabilidades, então a
+região que dispara encolhe para perto do canto "todos os `k` *features* em `π/2`" e o
+**vazamento** sobre entradas limpas **cai** — a ASR permanece alta. Uma segunda fonte (menor) de
+vazamento: quando a probabilidade de disparo fica entre 0 e 1, medir a ancila também colapsa
+parcialmente os qubits de dados, mesmo quando o gatilho não dispara. É a história honesta do
+gráfico `backdoor_asr_vs_clean.png`.
 
 ---
 
@@ -175,7 +215,10 @@ Para um golden `G` e um infected `I` avaliados na **mesma** entrada `x`, compara
   "sobreposição" entre as distribuições.
 - **BD** (*Bhattacharyya distance*): `−ln(BC)`, em `[0, ∞)`.
 
-Tudo com **512 shots × 15 repetições**, reportando **média e desvio**.
+Tudo com **512 shots × 15 repetições**, reportando **média e desvio**. A TVD de cada modelo é
+estimada nas **8 primeiras entradas de teste** (`n_eval_inputs: 8` no `configs/full.yaml`) para
+caber no orçamento de simulação. É uma amostra pequena por modelo; a acurácia e a taxa de
+inversão (abaixo) usam o conjunto de teste inteiro.
 
 ### Por que uma **linha de base golden × golden**?
 Com número **finito** de *shots*, **duas rodadas do mesmo circuito** já diferem por **ruído de
@@ -186,6 +229,13 @@ efeito real do trojan. (Isso vai além do artigo-base e é uma boa prática meto
 ### Métricas de QAML
 - **Acurácia limpa** e **queda de acurácia** (golden − infected), por variante — via estimador
   **exato** (rápido e determinístico).
+- **Taxa de inversão de predição** (`flip_rate`): fração das entradas de teste cujo rótulo previsto
+  pelo infected difere do golden. **Por que, se já temos a queda de acurácia?** Porque a queda
+  **subestima** o impacto em modelos fracos. Um `X` logo antes da medição inverte a paridade, então
+  a acurácia `a` vira `1 − a`. Num modelo com `a = 0,57`, a "queda" é só 0,14, embora **todas**
+  as predições tenham mudado. Na primeira rodada, 118 das 1.620 variantes tinham queda
+  **negativa** (o trojan "melhorou" o modelo). A taxa de inversão mede o efeito do trojan sobre a
+  saída, independentemente de o modelo ser bom.
 - Para o backdoor: **ASR** (fração de entradas com gatilho cujo rótulo **inverte** em relação ao
   golden) e **acurácia limpa** do modelo com backdoor — via **amostragem** (o backdoor tem medição
   intermediária e porta classicamente controlada, que o estimador exato não cobre).
@@ -205,13 +255,22 @@ Tratamos o **QASM como texto** (um documento) e classificamos **golden (0) vs in
   um *tokenizer* que preserva nomes de porta, registradores, números e colchetes (estrutura do QASM).
 - **Classificadores:** `LogisticRegression`, `MultinomialNB`, `ComplementNB`, `LinearSVC`.
 
-### Por que `GroupKFold` **e** `StratifiedKFold`?
-- **`GroupKFold`** mantém **todas as variantes de um mesmo circuito-base no mesmo fold**. Assim, o
-  detector é testado em **famílias de circuitos que nunca viu** — a pergunta **realista** de
-  implantação. Sem isso, variantes quase idênticas do mesmo modelo apareceriam no treino **e** no
-  teste, inflando artificialmente o desempenho (*vazamento por similaridade*).
-- **`StratifiedKFold`** ignora as famílias; é a linha de base **otimista**. O **contraste** entre as
-  duas é, por si só, informativo (normalmente o GroupKFold é mais baixo e mais honesto).
+### Três esquemas de validação: `group`, `arch` e `stratified`
+- **`group` — GroupKFold por modelo-base:** mantém **todas as variantes de um mesmo modelo
+  treinado no mesmo fold**. Sem isso, variantes quase idênticas do mesmo modelo apareceriam no
+  treino **e** no teste, inflando o desempenho (*vazamento por similaridade*).
+- **`arch` — GroupKFold por arquitetura (*leave-architecture-out*):** mantém juntos **todos os
+  modelos de uma mesma arquitetura** (codificação × repetições do ansatz × nº de qubits). Esse é o
+  teste em **estruturas de circuito que o detector nunca viu** — a pergunta **realista** de
+  implantação.
+- **`stratified` — StratifiedKFold:** ignora as famílias; é a linha de base **otimista**.
+
+> **Por que o `arch` foi adicionado.** O benchmark tem só **12 arquiteturas**, e cada uma aparece
+> em **9 modelos** (3 datasets × 3 sementes). Modelos da mesma arquitetura geram QASM
+> **estruturalmente idêntico**: só mudam os ângulos numéricos dos `ry`. Logo, o `group` sozinho
+> ainda mostra ao detector, no treino, a mesma estrutura que ele vê no teste. Isso explica por que
+> `group` e `stratified` davam praticamente o mesmo resultado, e por que a versão anterior deste
+> texto exagerava ao dizer que o `group` testava "famílias que o detector nunca viu".
 
 ### Desbalanceamento (por que subamostrar **só no treino** + `class_weight`)
 Há **muito mais infected do que golden** (1 golden : 15 infected). Para evitar um detector trivial
@@ -231,26 +290,42 @@ e **ROC-AUC**, além das **matrizes de confusão**. A tabela final sai no format
 
 ### O que os resultados realmente mostraram (leitura honesta)
 No *benchmark* completo, **BoW (`count`) + modelo linear** (LinearSVC/LogReg) detecta **quase
-perfeitamente** — recall ≈ F1 ≈ ROC-AUC ≈ 1,0 — **mesmo sob `GroupKFold`** e **mesmo no caso difícil
-só com `H`** (`detection_hard_summary.csv`). O motivo é instrutivo: os circuitos golden são compilados
-para um vocabulário pequeno e regular (`ry, p, cx, h`), então **qualquer inserção vira uma anomalia de
-n-gramas**; e `x/y/z/t` são tokens que um *compile* limpo **nunca** emite (fora do vocabulário). Já
-**TF-IDF e os Naive Bayes são bem mais fracos** (recall 0,08–0,45 sob `GroupKFold`), porque o TF-IDF
-**reduz o peso** justamente dos tokens estruturais frequentes que carregam o sinal. Conclusão honesta:
-a detecção lexical é fácil **neste cenário muito regular**, não em geral — em circuitos reais e
-diversos um detector de "saco de tokens" seria bem menos confiável, pois **não modela a semântica** do
-circuito. Por isso separamos o subproblema **in-vocabulary (`H`)**, que é o verdadeiro desafio.
+perfeitamente** — recall ≈ 0,96–1,0 e ROC-AUC ≈ 1,0 — sob **os três esquemas**, inclusive o
+***leave-architecture-out*** (`arch`), e **mesmo no caso só com `H`** (`detection_hard_summary.csv`).
+O motivo é instrutivo, e as duas razões valem para **todas** as arquiteturas (por isso sobrevivem ao
+`arch`):
+
+1. Os circuitos golden são compilados para um vocabulário pequeno (`ry, p, cx, h`), e `x/y/z/t` são
+   tokens que um *compile* limpo **nunca** emite (fora do vocabulário).
+2. **Todo golden tem exatamente tantos `h` quanto fases de codificação `p(2*_x_i_)`**: o feature map
+   aplica `H` e depois `P(2x)` em cada qubit, a cada repetição (verificado nos 108 golden). Um `h`
+   inserido quebra essa igualdade de contagem, e um modelo linear sobre contagens aprende isso de
+   imediato. Por isso até o caso "difícil" só com `H` é fácil.
+
+Já **TF-IDF e os Naive Bayes são bem mais fracos** (recall 0,18–0,44 sob `group`, 0,05–0,29 sob
+`arch`), porque o TF-IDF **reduz o peso** justamente dos tokens estruturais frequentes que carregam o
+sinal. Sob `arch`, o ROC-AUC deles (até 0,90) fica bem acima do recall: a **ordenação** sobrevive à
+mudança de arquitetura, mas o **limiar de decisão** não se transfere.
+
+Conclusão honesta: a detecção lexical é fácil **neste cenário muito regular**, não em geral. Um
+atacante que ficasse dentro do vocabulário limpo **e** preservasse essas relações de contagem não é
+coberto por este experimento. Em circuitos reais e diversos, um detector de "saco de tokens" seria
+bem menos confiável, pois **não modela a semântica** do circuito.
 
 ---
 
 ## 8. `explain.py` + `_tree_shap.py` — SHAP
 
-Ajustamos uma **floresta aleatória** que prevê um alvo (TVD média, ou queda de acurácia) a partir
-dos **atributos estruturais** da inserção (porta, modo, qubit, posição, deltas de
-profundidade/tamanho, família, codificação). O **SHAP** (valores de Shapley, via *Tree SHAP*)
-atribui a cada previsão a contribuição de cada atributo; reportamos a **importância global** (média
-do |SHAP|). Responde: **"o que mais afeta o impacto do trojan?"** (esperado: a identidade da porta —
-`X`/`Y` dominam a TVD).
+Ajustamos uma **floresta aleatória** que prevê um alvo (TVD média, queda de acurácia ou taxa de
+inversão) a partir dos **atributos estruturais** da inserção (porta, modo, qubit, posição, se ficou
+no fim do fio, deltas de profundidade/tamanho, família, codificação). O **SHAP** (valores de
+Shapley, via *Tree SHAP*) atribui a cada previsão a contribuição de cada atributo; reportamos a
+**importância global** (média do |SHAP|). Responde: **"o que mais afeta o impacto do trojan?"**
+
+No resultado, o atributo mais importante é `gate_t`, e não `gate_x`/`gate_y`. Isso **não**
+contradiz a física: a importância mede o quanto um atributo **separa** as previsões, e `T` é o caso
+extremo (quase inerte), então "é `T` ou não" é a divisão mais informativa. `Y`, a posição e
+`at_wire_end` vêm em seguida.
 
 ### Nota de portabilidade importante (decisão de projeto honesta)
 Nesta máquina o **Windows Smart App Control** está **ligado** e **bloqueia DLLs nativas não
@@ -288,8 +363,10 @@ métricas e as matrizes de confusão.
 - Saídas em **CSV** (metadata, sensitivity, inventory, errors, detection, backdoor, SHAP) e
   **figuras PNG**.
 - **Testes `pytest`:** formato de saída dos VQCs; *round-trip* de QASM; trojan altera a distribuição
-  (TVD > baseline); subamostragem não toca no teste; propriedade de eficiência do Tree SHAP; e o
-  pipeline completo em modo *quick* (marcado como `slow`).
+  (TVD > baseline); o modo `idle` ignora camadas só de barreira/medição e sorteia pontos distintos;
+  posições do modo `random` indexam só portas reais; o detector do *backdoor* segue `sin²(x)`;
+  subamostragem não toca no teste; o esquema `arch` separa arquiteturas inteiras; propriedade de
+  eficiência do Tree SHAP; e o pipeline completo em modo *quick* (marcado como `slow`).
 
 ---
 
@@ -302,6 +379,9 @@ métricas e as matrizes de confusão.
 | Por que `ZZFeatureMap`? | Codificação emaranhada e expressiva, comum em QML; contrasta com a `Z` (produto). |
 | Por que baseline golden×golden na TVD? | Sem ela, não dá para separar o trojan do **ruído de amostragem**. |
 | Por que `GroupKFold`? | Evita vazamento por similaridade entre variantes do mesmo circuito-base. |
+| Por que também o esquema `arch`? | Modelos da mesma arquitetura têm QASM estruturalmente idêntico; só deixando a arquitetura inteira de fora o detector é testado em estrutura nova. |
+| Por que `flip_rate` além da queda de acurácia? | Um trojan que inverte a paridade leva `a` a `1 − a`: em modelos fracos a "queda" é pequena embora todas as predições mudem. |
+| O gatilho do backdoor é exato? | Não: é um limiar suave (`sin²(x)` por qubit). Com `k = 1`, qualquer `x₀ > π/4` dispara; `k` maior torna o gatilho seletivo. |
 | Por que priorizar recall? | Falso negativo (infectado visto como limpo) é o erro crítico — mas reportamos tudo para não premiar o detector trivial. |
 | Por que o backdoor é condicional (mede ancila)? | A versão unitária vaza por emaranhamento; medir a ancila deixa o gatilho nítido. |
 | Por que Tree SHAP próprio? | O Smart App Control bloqueia `numba`/`shap` e `sklearn.ensemble`; a implementação exata dá os mesmos valores e roda em qualquer máquina. |

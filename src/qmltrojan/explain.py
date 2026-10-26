@@ -34,8 +34,8 @@ except Exception:  # pragma: no cover - environment dependent
 
 #: Structural attributes used as explanatory features (categoricals are one-hot encoded).
 NUMERIC_FEATURES: tuple[str, ...] = (
-    "qubit", "op_position", "depth_before", "depth_delta", "size_before", "size_delta",
-    "n_qubits",
+    "qubit", "op_position", "at_wire_end", "depth_before", "depth_delta", "size_before",
+    "size_delta", "n_qubits",
 )
 CATEGORICAL_FEATURES: tuple[str, ...] = ("gate", "mode", "placement", "encoding", "family")
 

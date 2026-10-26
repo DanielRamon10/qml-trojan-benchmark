@@ -3,18 +3,21 @@
 Treats each compiled circuit's OpenQASM as a document. Runs every
 (representation x classifier x cross-validation) combination over ``detect_seeds`` seeds and
 reports the full metric suite as ``mean +/- std``, plus confusion matrices. The positive class is
-``infected``; GroupKFold keeps all variants of one base VQC in the same fold.
+``infected``. Three CV schemes: ``group`` (GroupKFold by base model), ``arch`` (GroupKFold by
+architecture = encoding x ansatz reps x qubits, i.e. leave-architecture-out) and ``stratified``.
 
 Outputs (under ``results/<mode>/``):
 * ``detection.csv``                 -- per (seed, representation, classifier, cv) metrics
 * ``detection_summary.csv``         -- mean +/- std across seeds (paper-style table)
+* ``detection_hard_summary.csv``    -- same, for the in-vocabulary (H-only) sub-problem
 * ``detection_confusions.npz``      -- summed confusion matrices
 * figures: ``detection_recall.png``, ``detection_balacc.png``,
-  ``confusions_group.png``, ``confusions_stratified.png``
+  ``confusions_group.png``, ``confusions_arch.png``, ``confusions_stratified.png``
 """
 
 from __future__ import annotations
 
+import re
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -37,34 +40,48 @@ LOG = get_logger("exp4")
 
 METRICS = ["accuracy", "balanced_accuracy", "precision", "recall", "f1", "f1_macro", "roc_auc"]
 
+#: ``<dataset>_<encoding>_r<reps>_q<qubits>_s<seed>``; the dataset name may contain underscores.
+_ARCH_RE = re.compile(r"_(z|zz)_r(\d+)_q(\d+)_s\d+$")
+
+
+def architecture_of(model_id: str) -> str:
+    """Architecture key (encoding x ansatz reps x qubits) of a model id, ignoring dataset/seed."""
+    match = _ARCH_RE.search(model_id)
+    if match is None:
+        raise ValueError(f"cannot parse architecture from model id {model_id!r}")
+    enc, reps, nq = match.groups()
+    return f"{enc}_r{reps}_q{nq}"
+
 
 def build_corpus(paths, infected_gates: tuple[str, ...] | None = None,
-                 ) -> tuple[list[str], np.ndarray, np.ndarray]:
-    """Load golden (label 0) and infected (label 1) QASM texts with base-model group ids.
+                 ) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
+    """Load golden (label 0) and infected (label 1) QASM texts with model and architecture ids.
 
-    ``infected_gates`` optionally restricts the infected class to variants whose inserted gate is
-    in the set (filenames look like ``<model>__<gate>_<mode>_s<seed>.qasm``). Restricting to the
-    ``h`` insertion gives the *in-vocabulary* (hard) detection problem, because golden circuits in
-    this basis never contain bare ``x``/``y``/``z``/``t`` tokens, whereas ``h`` already occurs.
+    Returns ``(texts, labels, model_groups, arch_groups)``. ``infected_gates`` optionally
+    restricts the infected class to variants whose inserted gate is in the set (filenames look
+    like ``<model>__<gate>_<mode>_s<seed>.qasm``). Restricting to the ``h`` insertion gives the
+    *in-vocabulary* (hard) detection problem, because golden circuits in this basis never contain
+    bare ``x``/``y``/``z``/``t`` tokens, whereas ``h`` already occurs.
     """
-    texts, labels, groups = [], [], []
+    texts, labels, groups, archs = [], [], [], []
     model_ids: dict[str, int] = {}
+    arch_ids: dict[str, int] = {}
 
-    def gid(model_id: str) -> int:
-        return model_ids.setdefault(model_id, len(model_ids))
+    def add(text: str, label: int, model_id: str) -> None:
+        texts.append(text)
+        labels.append(label)
+        groups.append(model_ids.setdefault(model_id, len(model_ids)))
+        arch = architecture_of(model_id)
+        archs.append(arch_ids.setdefault(arch, len(arch_ids)))
 
     for f in sorted(paths.golden.glob("*.qasm")):
-        texts.append(f.read_text(encoding="utf-8"))
-        labels.append(0)
-        groups.append(gid(f.stem))
+        add(f.read_text(encoding="utf-8"), 0, f.stem)
     for f in sorted(paths.infected.glob("*.qasm")):
         gate = f.stem.split("__")[1].split("_")[0]
         if infected_gates is not None and gate not in infected_gates:
             continue
-        texts.append(f.read_text(encoding="utf-8"))
-        labels.append(1)
-        groups.append(gid(f.stem.split("__")[0]))
-    return texts, np.asarray(labels), np.asarray(groups)
+        add(f.read_text(encoding="utf-8"), 1, f.stem.split("__")[0])
+    return texts, np.asarray(labels), np.asarray(groups), np.asarray(archs)
 
 
 def main() -> None:
@@ -73,16 +90,17 @@ def main() -> None:
     cfg = load_config(mode)
     paths = resolve_paths(mode)
 
-    texts, labels, groups = build_corpus(paths)
-    LOG.info("Corpus: %d circuits (%d golden, %d infected), %d base models",
+    texts, labels, groups, archs = build_corpus(paths)
+    LOG.info("Corpus: %d circuits (%d golden, %d infected), %d base models, %d architectures",
              len(texts), int((labels == 0).sum()), int((labels == 1).sum()),
-             len(np.unique(groups)))
+             len(np.unique(groups)), len(np.unique(archs)))
 
     all_rows, confusions_by_seed = [], []
     with Timer(LOG, "exp4 total"):
         for seed in cfg["detect_seeds"]:
             df, confusions = run_detection_grid(texts, labels, groups,
-                                                n_splits=cfg["cv_splits"], seed=seed)
+                                                n_splits=cfg["cv_splits"], seed=seed,
+                                                arch_groups=archs)
             df["seed"] = seed
             all_rows.append(df)
             confusions_by_seed.append(confusions)
@@ -112,7 +130,7 @@ def main() -> None:
 
 
 def _run_hard_subset(cfg, paths) -> None:
-    texts, labels, groups = build_corpus(paths, infected_gates=("h",))
+    texts, labels, groups, archs = build_corpus(paths, infected_gates=("h",))
     n_pos, n_neg = int((labels == 1).sum()), int((labels == 0).sum())
     if n_pos == 0 or len(np.unique(groups)) < cfg["cv_splits"]:
         LOG.info("Hard (H-only) subset skipped (insufficient data).")
@@ -120,7 +138,8 @@ def _run_hard_subset(cfg, paths) -> None:
     LOG.info("Hard subset (H insertions only): %d golden + %d infected", n_neg, n_pos)
     rows = []
     for seed in cfg["detect_seeds"]:
-        df, _ = run_detection_grid(texts, labels, groups, n_splits=cfg["cv_splits"], seed=seed)
+        df, _ = run_detection_grid(texts, labels, groups, n_splits=cfg["cv_splits"], seed=seed,
+                                   arch_groups=archs)
         df["seed"] = seed
         rows.append(df)
     hard = pd.concat(rows, ignore_index=True)
@@ -152,13 +171,15 @@ def _figures(detection: pd.DataFrame, confusions: dict, paths) -> None:
         tmp["rep_cv"] = tmp["vectorizer"] + "/" + tmp["cv"]
         grouped_bars(tmp, "classifier", "rep_cv", metric, paths.figures / fname, title,
                      metric.replace("_mean", ""))
-    group = {k.replace("group_", ""): v for k, v in confusions.items() if k.startswith("group_")}
-    strat = {k.replace("stratified_", ""): v for k, v in confusions.items()
-             if k.startswith("stratified_")}
-    confusion_grid(group, paths.figures / "confusions_group.png",
-                   "Confusion matrices -- GroupKFold")
-    confusion_grid(strat, paths.figures / "confusions_stratified.png",
-                   "Confusion matrices -- StratifiedKFold")
+    for cv, fname, title in (
+        ("group", "confusions_group.png", "Confusion matrices -- GroupKFold (by base model)"),
+        ("arch", "confusions_arch.png", "Confusion matrices -- leave-architecture-out"),
+        ("stratified", "confusions_stratified.png", "Confusion matrices -- StratifiedKFold"),
+    ):
+        sub = {k.removeprefix(f"{cv}_"): v for k, v in confusions.items()
+               if k.startswith(f"{cv}_")}
+        if sub:
+            confusion_grid(sub, paths.figures / fname, title)
 
 
 if __name__ == "__main__":
